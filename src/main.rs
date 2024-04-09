@@ -56,6 +56,9 @@ struct Game {
     board: [[char; GRID_SIZE]; GRID_SIZE],
     player: (usize, usize),
     destination: (usize, usize),
+    barriers: Vec<(usize, usize)>,
+    powerup: (usize, usize),
+    has_powerup: bool,
 }
 
 impl Game {
@@ -64,6 +67,18 @@ impl Game {
             board: [['-'; GRID_SIZE]; GRID_SIZE],
             player: (0, 0),
             destination: (4, 7),
+            barriers: vec![
+                (0, 2),
+                (1, 2),
+                (2, 2),
+                (3, 2),
+                (4, 2),
+                (5, 2),
+                (6, 2),
+                (7, 2),
+            ],
+            powerup: (5, 0),
+            has_powerup: false,
         }
     }
 
@@ -72,8 +87,12 @@ impl Game {
             for (j, char) in row.iter().enumerate() {
                 if (i, j) == self.player {
                     print!("P ");
+                } else if self.barriers.contains(&(i, j)) {
+                    print!("x ");
                 } else if (i, j) == self.destination {
                     print!("D ");
+                } else if (i, j) == self.powerup {
+                    print!("O ");
                 } else {
                     print!("{} ", char);
                 }
@@ -83,8 +102,15 @@ impl Game {
         println!();
     }
 
-    fn play(&mut self, path: Vec<(usize, usize)>) {
-        for (i, j) in path {
+    fn play(&mut self, instructions: Vec<(usize, usize)>) {
+        for (i, j) in instructions {
+            if !self.has_powerup && self.powerup == (i, j) {
+                self.has_powerup = true;
+            }
+            if self.has_powerup {
+                // Clear barriers if the player has the powerup
+                self.barriers.clear();
+            }
             self.player = (i, j);
             self.print_board();
             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -106,9 +132,15 @@ impl Game {
                 let new_x = x + i;
                 let new_y = y + j;
 
+                // Check if the neighbor position is within the grid boundaries
                 if new_x >= 0 && new_x < GRID_SIZE as i32 && new_y >= 0 && new_y < GRID_SIZE as i32
                 {
-                    neighbors.push((new_x as usize, new_y as usize));
+                    let neighbor = (new_x as usize, new_y as usize);
+
+                    // Check if the neighbor position is not a barrier or the player has the power-up
+                    if !self.barriers.contains(&neighbor) || self.has_powerup {
+                        neighbors.push(neighbor);
+                    }
                 }
             }
         }
@@ -116,21 +148,41 @@ impl Game {
         neighbors
     }
 
-    fn a_star(&self) -> Option<Vec<(usize, usize)>> {
+    fn a_star(&mut self) -> Vec<(usize, usize)> {
+        // A* from player to destination directly
+        let path_to_destination = self.a_star_path(self.player, self.destination);
+        // A* from player to powerup to destination
+        let path_to_powerup = self.a_star_path(self.player, self.powerup);
+        let path_from_powerup_to_destination = self.a_star_path(self.powerup, self.destination);
+
+        match path_to_powerup {
+            Some(path_to_powerup) => match path_from_powerup_to_destination {
+                Some(path_from_powerup_to_destination) => {
+                    let mut path = path_to_powerup.clone();
+                    path.extend(path_from_powerup_to_destination);
+                    path
+                }
+                None => path_to_destination.expect("No path found"),
+            },
+            None => path_to_destination.expect("No path found"),
+        }
+    }
+
+    fn a_star_path(
+        &self,
+        start: (usize, usize),
+        goal: (usize, usize),
+    ) -> Option<Vec<(usize, usize)>> {
         let mut open_set = BinaryHeap::new();
         let mut came_from = HashMap::new();
         let mut g_scores = HashMap::new();
 
-        g_scores.insert(self.player, 0.0);
+        g_scores.insert(start, 0.0);
 
-        open_set.push(Node::new(
-            self.player,
-            0.0,
-            calc_dist(self.player, self.destination),
-        ));
+        open_set.push(Node::new(start, 0.0, calc_dist(start, goal)));
 
         while let Some(current) = open_set.pop() {
-            if current.point == self.destination {
+            if current.point == goal {
                 let mut path = vec![current.point];
                 let mut node = current;
                 while let Some(&prev_point) = came_from.get(&node.point) {
@@ -146,7 +198,7 @@ impl Game {
                     g_scores[&current.point] + calc_dist(current.point, neighbor);
                 if !g_scores.contains_key(&neighbor) || tentative_g_score < g_scores[&neighbor] {
                     g_scores.insert(neighbor, tentative_g_score);
-                    let h_score = calc_dist(neighbor, self.destination);
+                    let h_score = calc_dist(neighbor, goal);
                     open_set.push(Node::new(neighbor, tentative_g_score, h_score));
                     came_from.insert(neighbor, current.point);
                 }
@@ -162,9 +214,7 @@ fn main() {
 
     game.print_board();
 
-    if let Some(path) = game.a_star() {
-        game.play(path);
-    } else {
-        println!("No path found!");
-    }
+    let path = game.a_star();
+
+    game.play(path);
 }
